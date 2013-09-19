@@ -1,0 +1,49 @@
+<?php 
+
+/**
+*
+* Implements hook_schema
+*
+*/
+function fb_feed_schema() {
+	//drupal_set_message('hook_schema is run');
+	$schema['fb_feed_blocks'] = array(
+		'description' => 'Table containing setting for feed blocks',
+		'fields' => array(
+			'name' => array(
+				'description' => 'Machine readable name for the block',
+				'type' => 'varchar',
+				'length' => 255,
+				'not null' => TRUE,
+				'default' => ''
+			),
+			'title' => array(
+				'description' => 'Title for the block',
+				'type' => 'varchar',
+				'length' => 255
+			),
+			'type' => array(
+				'description' => 'Type of the object from whom the feed is',
+				'type' => 'varchar',
+				'length' => 255,
+				'not null' => TRUE
+			),
+			'id' => array(
+				'description' => 'Identifier of the object from whom the feed is',
+				'type' => 'varchar',
+				'length' => 255,
+				'not null' => TRUE,
+				'default' => ''
+			),
+			'header' => array(
+				'description' => 'Is there a header on the top of the feed',
+				'type' => 'int',
+				'size' => 'tiny',
+				'default' => TRUE
+			)
+		),
+		'primary key' => array('name'),
+		'unique keys' => array('name' => array('name'))
+	);
+	return $schema;
+}

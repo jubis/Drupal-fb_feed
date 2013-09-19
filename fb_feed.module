@@ -1,0 +1,545 @@
+<?php 
+define('FB_URL','http://www.facebook.com/');
+
+/**
+* Implements hook_help
+*
+* Displays help and module information.
+*
+* @param path
+*   Which path of the site we're using to display help
+* @param arg
+*   Array that holds the current path as returned from arg() function
+*/
+function fb_feed_help($path,$arg) {
+	switch ($path) {
+		case 'admin/help#fb_feed':
+			return '<p>'. t('Create block containing custom Facebook feeds') .'</p>';
+	}
+
+}
+
+/**
+*
+* Get blocks saved in database
+*
+*/
+function fb_feed_get_blocks($fields = array()) {
+	$blocks = db_select('fb_feed_blocks','b')
+				->fields('b')
+				->execute()
+				->fetchAllAssoc('name',PDO::FETCH_ASSOC);
+	
+	$output = array();
+	if(!empty($fields)) {
+		foreach ($blocks as $i => $block) {
+			$output[$i] = array();
+			foreach ($fields as $field) {
+				if (isset($block[$field])) {
+					$output[$i][$field] = $block[$field];
+				}
+			}
+		}
+	} else {
+		$output = $blocks;
+	}
+	//var_dump($output);
+	return $output;
+}
+
+/**
+*
+* Delete block from database
+*
+*/
+function fb_feed_delete_block( $name ) {
+	db_delete( 'fb_feed_blocks' )
+			->condition( 'name', $name )
+			->execute();
+}
+
+/**
+*
+* Implements hook_block_info
+*
+*/
+function fb_feed_block_info() {
+	$blocks = array();
+	foreach(fb_feed_get_blocks() as $block) {
+		$blocks[$block['name']] = array(
+			'info' => t('FB Feed: '.$block['title'])
+		);
+	}
+	//var_dump($blocks);
+	return $blocks;
+}
+
+/**
+*
+* Require Facebook PHP API
+*
+*/
+function fb_feed_require_api() {
+	require_once(drupal_get_path('module','fb_feed') .'/fb-php-sdk/src/facebook.php');
+}
+
+/**
+*
+* Facebook authentication function
+*
+* Get proper app access_token from FB Graph API
+*
+** / Arguments replaced with setting variables
+** @app_id
+**   Facebook App's own id
+** @secret
+**   Facebook App's secret code
+** /
+* @return
+*   Facebook-object
+*/
+function fb_feed_config_api(/*$app_id,$secret*/) {
+	fb_feed_require_api();
+
+	$app_id = variable_get('fb_feed_app_id','');
+	$secret = variable_get('fb_feed_secret','');
+	
+	$config = array();
+	$config['appId'] = $app_id;
+	$config['secret'] = $secret;
+
+	return new Facebook($config);
+}
+
+/**
+*
+* Feed creator function
+*
+* @data
+*   Graph API response, connetion: feed 
+*   only the 'data' cell
+*
+* @return
+*   feed data as a FB feed looking item list
+*   ready for use html
+*/
+function fb_feed_get_post_item_list($data) {
+	if(!isset($data[0])) {
+		return array('#markup' => '<p><b>Post item list cannot be created with given data.</b></p>'.
+								  '<p>If head above work\'s fine the problem may be '.
+								  'that you\'r trying to show page as a group or vice versa.</p>'	);
+	}
+
+	$posts = array();
+	foreach ($data as $i => $post) {
+		
+		// link to author profile => $title
+		$title = array(
+			'#theme' => 'link',
+			'#path' => FB_URL .$post['from']['id'],
+			'#text' => $post['from']['name'],
+			'#options' => array(
+				'attributes' => array('target'=>'_blank'),
+				'html' => TRUE
+			)
+		);
+		
+		// author profile picture => $image
+		$image = array(
+			'#theme' => 'link',
+			'#path' => FB_URL .$post['from']['id'],
+			'#text' => theme('image',array(
+				'path' => 'http://graph.facebook.com/'. $post['from']['id'] .'/picture'
+			)),
+			'#options' => array(
+						'attributes' => array('target'=>'_blank'),
+						'html' => TRUE
+			)
+		);
+		
+		$post_url = FB_URL . $post['id'];
+		// Custom post output by its type => $content
+		$content = array();
+		$content['text'] = array(
+			'#value' => '<p>'. (isset($post['message']) ? $post['message'] : '') .'</p>',
+			'#theme' => 'html_tag',
+			'#tag' => 'div',
+			'#attributes' => array('class'=>array('field-content-text'))
+		);
+		switch ($post['type']) {
+			case 'status':
+				break;
+			case 'photo':
+				$content['photo'] = array(
+					'image_in_link' => array(
+						'#theme' => 'link',
+						'#path' => $post['link'],
+						'#text' => theme('image',array (
+							'path' => $post['picture']
+						)),
+						'#options' => array(
+							'html' => TRUE,
+							'attributes' => array('target'=>'_blank')
+						)
+					),
+					'#theme_wrappers' => array('html_tag_wrapper'),
+					'#tag' => 'div',
+					'#attributes' => array('class'=>'field-content-image')
+				);//$content .= '<div class="field-content-image"></div>';
+				
+				$post_url = $post['link'];
+				break;
+			case 'video':
+				$content['video'] = array(
+					'video_text' => array(
+						'#markup' => '<p class="fb-video-text">Video:</p>'
+					),
+					'video_in_link' => array(
+						'#theme' => 'link',
+						'#path' => $post['link'],
+						'#text' => theme('image',array(
+							'path' => $post['picture']
+						)),
+						'#options' => array(
+							'html' => TRUE,
+							'attributes' => array('target' => '_blank')
+						)
+					),
+					'#theme_wrappers' => array('html_tag_wrapper'),
+					'#tag' => 'div',
+					'#attributes' => array('class' => 'field-content-video')
+				);
+			
+				$post_url = FB_URL . $post['id'];
+				break;
+			case 'link':
+				$content['link'] = array(
+					'#theme' => 'fb_post_link',
+					'#link' => $post['link'],
+					'#name' => $post['name'],
+					'#description' => isset($post['description']) ? $post['description'] : NULL,
+					'#picture' => isset($post['picture']) ? $post['picture'] : NULL
+				);
+				$post_url = FB_URL . $post['id'];
+				break;
+			default:
+				$content = '';
+				$post_url = FB_URL . $post['id'];
+				break;
+		}
+		
+		// Show comment and link counts => $actions
+		$actions = array();
+		if(isset($post['likes']) || $post['comments']['count'] > 0) {
+			if(isset($post['likes'])) {
+				$actions['fb-post-likes'] = array(
+					'#type' => 'html_tag',
+					'#tag' => 'div',
+					'#attributes' => array('class'=>'fb-post-likes'),
+					'#value' => '<span class="like-icon icon"> </span><span>'. $post['likes']['count'] .'</span>'
+				);//'<div class="fb-post-likes"></div>';
+			}
+			else {
+				$actions['fb-post-likes'] = array(
+					'#type' => 'html_tag',
+					'#tag' => 'div',
+					'#attributes' => array('class'=>'fb-post-likes'),
+					'#value' => '<span class="like-icon icon"> </span><span>0</span>'
+				);//'<div class="fb-post-likes"></div>';
+			}
+			$actions['fb-post-comments'] = array(
+				'#theme' => 'html_tag',
+				'#tag' => 'div',
+				'#attributes' => array('class'=>'fb-post-comments'),
+				'#value' => '<span class="comment-icon icon"> </span><span>'. $post['comments']['count'] .'</span>'
+			);//'<div class="fb-post-comments"></div>';
+			$actions = array(
+				'#theme' => 'link',
+				'#path' => $post_url,
+				'#text' => render($actions),
+				'#options' => array(
+					'attributes' => array('target'=>'_blank'),
+					'html' => TRUE
+				)
+			);
+		}
+		
+		//var_dump($content);
+		// Put the post in a box
+		$rend_post = array(
+			'#theme' => 'fb_post',
+			'#image' => $image,
+			'#title' => $title,
+			'#content' => $content,
+			'#actions' => $actions
+		);
+		$posts[] = array(
+			'data' => render($rend_post)
+		);
+	}
+
+	// Create a themed list out of all the posts
+	$item_list = array(
+		'#theme' => 'item_list',
+		'#items' => $posts
+	);	
+
+	//var_dump($item_list);
+	return $item_list;
+}
+
+/**
+*
+* Header creator function for group 
+* 	Creates head for the block containing link to Facebook etc
+*
+* @obj
+*   Graph API data from object containing the feed
+* @members
+*   Graph API data: array containing group members
+*
+* @return
+*   Head for the block in html
+*/
+function fb_feed_get_group_head($obj,$members) {
+	if(!isset($obj['name']) || !isset($members[0])) {
+		return array(
+			'#type' => 'markup',
+			'#markup' => 'Head for the block cannot be created with given arguments $obj and $members'
+		);
+	} else {
+		$description_title = '';
+		if(isset($obj['description'])) {
+			$description_title .= ' title="'. $obj['description'] .'"';
+		}
+	
+		return array(
+			'#theme' => 'fb_feed_head__group',
+			'#id' => $obj['id'],
+			'#name' => $obj['name'],
+			'#description_title' => $description_title,
+			'#fans' => count($members)
+		);
+	} 
+}
+
+/**
+*
+* Header creator function for page
+* 	Creates head for the block containing link to Facebook etc
+*
+* @obj
+*   Graph API data from object containing the feed
+*
+* @return
+*   Head for the block in html
+*/
+function fb_feed_get_page_head($obj) {
+	if(!isset($obj['name'])) {
+		return array(
+			'#type' => 'markup',
+			'#markup' => 'Head for the block cannot be created with given arguments $obj'
+		);
+	} else {
+		$description_title = '';
+		if(isset($obj['description'])) {
+			$description_title .= ' title="'. $obj['description'] .'"';
+		}
+		
+		if( ! isset( $obj['likes'] )) {
+			return array(
+				'#markup' => '<p><b>Head can\'t be created</b></p>'.
+							 '<p>Given Object ID may not refer to a Facebook page.</p>'
+			);
+		}
+		return array(
+			'#theme' => 'fb_feed_head__page',
+			'#id' => $obj['id'],
+			'#name' => $obj['name'],
+			'#description_title' => $description_title,
+			'#fans' => $obj['likes']
+		);
+	} 
+}
+
+/**
+*
+* Implements hook_block_view
+*
+*/
+function fb_feed_block_view($delta = '') {
+	global $base_url;
+	//var_dump($delta);
+	foreach(fb_feed_get_blocks(array('name','title')) as $block_data) {
+		if($delta == $block_data['name']) {
+			$block_hash = md5($block_data['name']);
+
+			$class= 'class="fb_feed_block"';
+			$loader = '<div id="loader_'. $block_data['name'] .'" class="fb_loader">'.
+					  '<img src="'. drupal_get_path('module','fb_feed') .'/loading.gif"></div>';
+			$on_load = 'onload="fb_feed_hide(\'#loader_'. $block_data['name'] .'\')"';
+			
+			$block['subject'] = $block_data['title'];
+			$block['content'] = $loader.'<script></script><iframe '.$class.' '.$on_load.' src="?q=fb_feed/'. $block_hash .'"></iframe>';
+			
+			return $block;
+		}
+	}
+}
+
+/**
+*
+* Implements hook_theme
+*
+*/
+function fb_feed_theme() {
+	//drupal_set_message('fb_feed_theme is called');
+	return array(
+		'fb_post' => array(
+			'variables' => array(
+				'image' => NULL,
+				'title' => NULL,
+				'content' => NULL,
+				'actions' => NULL,
+				'fb_url'=>'http://www.facebook.com/'
+			),
+			'file' => 'fb_feed.theme.inc'
+		),
+		'fb_post_link' => array(
+			'variables' => array(
+				'name' => NULL,
+				'link' => NULL,
+				'picture' => NULL,
+				'description' => NULL
+			),
+			'file' => 'fb_feed.theme.inc'
+		),
+		'fb_feed_head' => array(
+			'variables' => array(
+				'id' => NULL,
+				'name' => NULL,
+				'description_title' => NULL,
+				'fans' => 0
+			),
+			'pattern' => 'fb_feed_head__',
+			'file' => 'fb_feed.theme.inc'
+		),
+		'html_tag_wrapper' => array(
+			'variables' => array(
+				'children' => NULL,
+				'value' => NULL,
+				'value_prefix' => NULL,
+				'value_suffix' =>NULL,
+				'tag' => NULL,
+				'attributes' => NULL
+			),
+			'file' => 'fb_feed.theme.inc'
+		),
+		'fb_feed_css' => array(
+			'file' => 'fb_feed.theme.inc'
+		)
+	);
+}
+
+/**
+*
+* Implements hook_menu()
+*
+*/
+function fb_feed_menu() {
+	$paths = array();
+	
+	$paths['admin/config/content/fb_feed'] = array(
+		'title' => 'FB Feed',
+		'description' => 'Configuration for FB Feed module',
+		'page callback' => 'drupal_get_form',
+		'page arguments' => array('fb_feed_form'),
+		'access arguments' => array('access administration pages'),
+		'type' => MENU_NORMAL_ITEM,
+		'file' => 'fb_feed.admin.inc'
+	);
+	$paths['admin/structure/fb_feed'] = array(
+		'title' => 'FB Feed: Block editors',
+		'desription' => 'Create feed blocks',
+		'page callback' => 'drupal_get_form',
+		'page arguments' => array('fb_feed_block_editor'),
+		'access arguments' => array('access fb_feed block editor'),
+		'type' => MENU_NORMAL_ITEM,
+		'file' => 'fb_feed.admin.inc'
+	);
+	$paths['admin/structure/fb_feed/%/edit'] = array(
+		'title' => 'FB Feed: Edit',
+		'desription' => 'Edit feed block',
+		'page callback' => 'drupal_get_form',
+		'page arguments' => array('fb_feed_block_editor'),
+		'access arguments' => array('access fb_feed block editor'),
+		'type' => MENU_CALLBACK,
+		'file' => 'fb_feed.admin.inc'
+	);
+	$paths['admin/structure/fb_feed/%/delete'] = array(
+		'title' => 'FB Feed: Delete',
+		'desription' => 'Delete feed block',
+		'page callback' => 'drupal_get_form',
+		'page arguments' => array('fb_feed_block_delete'),
+		'access arguments' => array('access fb_feed block delete'),
+		'type' => MENU_CALLBACK,
+		'file' => 'fb_feed.admin.inc'
+	);
+	$paths['fb_feed/%'] = array(
+		'delivery callback' => 'drupal_deliver_html_page',
+		'page callback' => 'fb_feed_block_as_page',
+		'type' => MENU_CALLBACK,
+		'access arguments' => array('access content'),
+		'file' => 'fb_feed.page.inc'
+	);
+	
+	return $paths;
+}
+
+/**
+*
+* Implements hook_block_configure
+*  Adds block config page link to feed editor
+*
+*/
+function fb_feed_block_configure($delta = '') {
+	$form = array();
+	//var_dump($delta);
+	foreach(fb_feed_get_blocks(['name']) as $block) {
+		if($delta == $block['name']) {
+			module_load_include('inc','fb_feed','fb_feed.admin');
+			return fb_feed_block_editor([],[],$block['name']);
+		}
+	}
+}
+
+/**
+*
+* Implements hook_block_save
+*
+*/
+function fb_feed_block_save($delta = '',$edit) {
+	$form = array();
+	//var_dump($delta);
+	foreach(fb_feed_get_blocks(['name']) as $block) {
+		if($delta == $block['name']) {
+			//drupal_set_message('saving block '.$edit['name']);
+			module_load_include('inc','fb_feed','fb_feed.admin');
+			fb_feed_block_editor_validate([],[],$edit);
+			fb_feed_block_editor_submit([],[],$edit);
+		}
+	}
+}
+
+/**
+*
+* Implements hook_permissions
+*
+*/
+function fb_feed_permissions() {
+	return array(
+		'access fb_feed block editor' => array(
+			'title' => t('Access editor of blocks created by FB Feed')
+		)
+	);
+}

@@ -1,0 +1,6 @@
+name = FB Feed
+description = FB Feed creates custom feeds from Facebook
+core = 7.x
+stylesheets[all][] = fb_feed.css
+scripts[] = fb_feed.js
+configure = admin/config/content/fb_feed
